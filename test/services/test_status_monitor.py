@@ -1191,3 +1191,62 @@ class TestProcessChunkBufferTruncation:
         sm_large._detect_status = lambda tid, buf: TerminalStatus.UNKNOWN
         sm_large._process_chunk("t1", payload)
         assert "MARKER" in sm_large.get_buffer("t1")
+
+
+class TestMidBurstProcessingProbe:
+    """A TUI that redraws its spinner every second never goes quiescent, so the
+    edge-only screen path saw IDLE for a whole busy turn (codex 0.153, live
+    2026-09-08). While bursting, the screen is probed at most every
+    PYTE_MIDBURST_PROBE_S and only a PROCESSING verdict is applied."""
+
+    def _bursting_monitor(self):
+        sm = StatusMonitor()
+        sm._loop = MagicMock()  # a loop exists -> edge-debounced path, not inline
+        sm._arm_quiesce_timer = lambda *a, **k: None
+        sm._cancel_quiesce_handle = lambda *a, **k: None
+        sm._last_status["t1"] = TerminalStatus.IDLE
+        sm._allow_processing_revert["t1"] = True
+        return sm
+
+    def test_processing_seen_mid_burst_is_applied(self):
+        sm = self._bursting_monitor()
+        provider = MagicMock()
+        provider.supports_screen_detection = True
+        verdicts = iter([TerminalStatus.IDLE, TerminalStatus.PROCESSING, TerminalStatus.PROCESSING])
+        sm._detect_screen = lambda tid, prov: next(verdicts)
+
+        sm._schedule_screen_detection("t1", provider)  # rising edge: still the old ready box
+        assert sm._last_status["t1"] == TerminalStatus.IDLE
+        sm._schedule_screen_detection("t1", provider)  # mid-burst probe: spinner visible
+        assert sm._last_status["t1"] == TerminalStatus.PROCESSING
+
+    def test_probe_is_rate_limited_and_never_applies_ready(self):
+        sm = self._bursting_monitor()
+        provider = MagicMock()
+        provider.supports_screen_detection = True
+        calls = []
+
+        def detect(tid, prov):
+            calls.append(tid)
+            return TerminalStatus.COMPLETED  # a half-drawn frame parsing ready
+
+        sm._detect_screen = detect
+        sm._schedule_screen_detection(
+            "t1", provider
+        )  # rising edge (applies nothing: IDLE->COMPLETED? no arm consumed either way)
+        sm._last_status["t1"] = TerminalStatus.IDLE
+        sm._schedule_screen_detection("t1", provider)  # first mid-burst probe
+        sm._schedule_screen_detection("t1", provider)  # within PYTE_MIDBURST_PROBE_S: no probe
+        assert len(calls) == 2
+        assert sm._last_status["t1"] == TerminalStatus.IDLE
+
+    def test_no_probe_once_processing(self):
+        sm = self._bursting_monitor()
+        sm._last_status["t1"] = TerminalStatus.PROCESSING
+        provider = MagicMock()
+        provider.supports_screen_detection = True
+        calls = []
+        sm._detect_screen = lambda tid, prov: calls.append(tid) or TerminalStatus.PROCESSING
+        sm._bursting["t1"] = True
+        sm._schedule_screen_detection("t1", provider)
+        assert calls == []
