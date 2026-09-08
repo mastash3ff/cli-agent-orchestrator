@@ -76,6 +76,27 @@ class TestReadSessionOutputImpl:
         assert result["terminal_id"] == "term-9"
         assert result["output"] == "abc"
 
+    def test_resolves_session_by_bare_name_via_cao_prefix_retry(self) -> None:
+        """A bare session_name (not yet "cao-"-prefixed) must still resolve,
+        since sessions are stored with SESSION_PREFIX applied."""
+        responses = [
+            _response(status_code=404, json_data={"detail": "Session 'acc-agy' not found"}),
+            _response(json_data={"name": "cao-acc-agy", "terminals": [{"id": "term-9"}]}),
+            _response(json_data={"output": "abc", "mode": "full"}),
+        ]
+        with patch(REQUEST, side_effect=responses) as mock_request:
+            result = _read_session_output_impl(None, "acc-agy", "full", None)
+
+        assert result["success"] is True
+        assert result["terminal_id"] == "term-9"
+        assert result["output"] == "abc"
+        mock_request.assert_any_call(
+            "get", "http://127.0.0.1:9889/sessions/acc-agy", params=None, json=None
+        )
+        mock_request.assert_any_call(
+            "get", "http://127.0.0.1:9889/sessions/cao-acc-agy", params=None, json=None
+        )
+
     def test_session_resolve_error_is_returned(self) -> None:
         """An API error while resolving a session is surfaced without an output read."""
         with patch(

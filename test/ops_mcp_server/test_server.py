@@ -346,6 +346,26 @@ class TestSessionLifecycleTools:
             json=None,
         )
 
+    async def test_launch_session_result_includes_provider_from_api_response(self) -> None:
+        """The Terminal model's provider field should be surfaced on LaunchResult."""
+        with patch(
+            "cli_agent_orchestrator.ops_mcp_server.server.requests.request",
+            return_value=_response(json_data={"id": "term-789", "provider": "codex"}),
+        ):
+            result = await launch_session(
+                agent_profile="developer",
+                provider="codex",
+                session_name="provider-session",
+            )
+
+        assert result == LaunchResult(
+            success=True,
+            message="Session 'provider-session' launched successfully",
+            session_name="provider-session",
+            terminal_id="term-789",
+            provider="codex",
+        )
+
     async def test_launch_session_passes_model_and_initial_message(self) -> None:
         """The model stays in routing params and the first task stays in JSON."""
         initial_message = "Review the current change"
@@ -683,6 +703,87 @@ class TestSessionLifecycleTools:
             "success": False,
             "message": "Get session info for 'cao-123' failed: boom",
         }
+
+    async def test_get_session_info_retries_with_cao_prefix_when_bare_name_missing(
+        self,
+    ) -> None:
+        """A bare name (e.g. what launch_session's session_name echoed back)
+        must resolve, since sessions are actually stored as "cao-<name>"."""
+        payload = {"name": "cao-acc-agy", "terminals": [{"id": "term-1"}]}
+        responses = [
+            _response(status_code=404, json_data={"detail": "Session 'acc-agy' not found"}),
+            _response(json_data=payload),
+        ]
+        with patch(
+            "cli_agent_orchestrator.ops_mcp_server.server.requests.request",
+            side_effect=responses,
+        ) as mock_request:
+            result = await get_session_info("acc-agy")
+
+        assert result == payload
+        assert mock_request.call_count == 2
+        mock_request.assert_any_call(
+            "get", "http://127.0.0.1:9889/sessions/acc-agy", params=None, json=None
+        )
+        mock_request.assert_any_call(
+            "get", "http://127.0.0.1:9889/sessions/cao-acc-agy", params=None, json=None
+        )
+
+    async def test_get_session_info_does_not_retry_when_already_prefixed(self) -> None:
+        """A name already carrying the prefix must not be retried again on 404."""
+        with patch(
+            "cli_agent_orchestrator.ops_mcp_server.server.requests.request",
+            return_value=_response(status_code=404, json_data={"detail": "Session not found"}),
+        ) as mock_request:
+            result = await get_session_info("cao-missing")
+
+        assert result == {
+            "success": False,
+            "message": "Get session info for 'cao-missing' failed: Session not found",
+        }
+        mock_request.assert_called_once_with(
+            "get", "http://127.0.0.1:9889/sessions/cao-missing", params=None, json=None
+        )
+
+    async def test_get_session_info_does_not_retry_on_non_404_error(self) -> None:
+        """A non-404 error (e.g. 500) must not trigger a prefixed retry."""
+        with patch(
+            "cli_agent_orchestrator.ops_mcp_server.server.requests.request",
+            return_value=_response(status_code=500, json_data={"detail": "Internal error"}),
+        ) as mock_request:
+            result = await get_session_info("acc-agy")
+
+        assert result == {
+            "success": False,
+            "message": "Get session info for 'acc-agy' failed: Internal error",
+        }
+        mock_request.assert_called_once_with(
+            "get", "http://127.0.0.1:9889/sessions/acc-agy", params=None, json=None
+        )
+
+    async def test_shutdown_session_retries_with_cao_prefix_when_bare_name_missing(
+        self,
+    ) -> None:
+        """shutdown_session must resolve a bare name the same way get_session_info does."""
+        payload = {"success": True, "deleted_terminals": 1}
+        responses = [
+            _response(status_code=404, json_data={"detail": "Session 'acc-agy' not found"}),
+            _response(json_data=payload),
+        ]
+        with patch(
+            "cli_agent_orchestrator.ops_mcp_server.server.requests.request",
+            side_effect=responses,
+        ) as mock_request:
+            result = await shutdown_session("acc-agy")
+
+        assert result == payload
+        assert mock_request.call_count == 2
+        mock_request.assert_any_call(
+            "delete", "http://127.0.0.1:9889/sessions/acc-agy", params=None, json=None
+        )
+        mock_request.assert_any_call(
+            "delete", "http://127.0.0.1:9889/sessions/cao-acc-agy", params=None, json=None
+        )
 
     async def test_shutdown_session_returns_success_payload(self) -> None:
         """Shutdown should return the API success payload."""

@@ -6,7 +6,7 @@ import requests  # type: ignore[import-untyped]
 from fastmcp import FastMCP
 from pydantic import Field
 
-from cli_agent_orchestrator.constants import API_BASE_URL
+from cli_agent_orchestrator.constants import API_BASE_URL, SESSION_PREFIX
 from cli_agent_orchestrator.ops_mcp_server.models import (
     InstallResult,
     LaunchResult,
@@ -80,6 +80,47 @@ def _request_json(
         )
     except requests.RequestException as exc:
         return None, f"{operation} failed: {exc}"
+
+    if response.status_code >= 400:
+        return None, f"{operation} failed: {_response_detail(response)}"
+
+    try:
+        return response.json(), None
+    except ValueError as exc:
+        return None, f"{operation} failed: invalid JSON response ({exc})"
+
+
+def _request_session_json(
+    method: str,
+    session_name: str,
+    *,
+    operation: str,
+) -> tuple[Optional[Any], Optional[str]]:
+    """Request ``/sessions/{session_name}``, retrying once with SESSION_PREFIX
+    ("cao-") applied when the bare name isn't found.
+
+    Sessions are always stored prefixed -- both ``POST /sessions`` and
+    ``terminal_service.create_terminal`` apply SESSION_PREFIX to the name a
+    caller supplies -- but launch_session's own result surfaces the bare
+    ``session_name`` a caller passed in, so a name-taking ops tool given that
+    same value back (e.g. ``get_session_info("acc-agy")`` for a session
+    actually stored as ``"cao-acc-agy"``) 404s without this retry.
+    """
+    try:
+        response = requests.request(
+            method, f"{API_BASE_URL}/sessions/{session_name}", params=None, json=None
+        )
+    except requests.RequestException as exc:
+        return None, f"{operation} failed: {exc}"
+
+    if response.status_code == 404 and not session_name.startswith(SESSION_PREFIX):
+        prefixed_name = f"{SESSION_PREFIX}{session_name}"
+        try:
+            response = requests.request(
+                method, f"{API_BASE_URL}/sessions/{prefixed_name}", params=None, json=None
+            )
+        except requests.RequestException as exc:
+            return None, f"{operation} failed: {exc}"
 
     if response.status_code >= 400:
         return None, f"{operation} failed: {_response_detail(response)}"
@@ -169,6 +210,7 @@ async def _launch_session_impl(
         )
 
     terminal_id = str(session_data["id"])
+    launched_provider = session_data.get("provider")
     message = (
         f"Session '{resolved_session_name}' launched; initial message delivery is in progress"
         if initial_message is not None
@@ -179,6 +221,7 @@ async def _launch_session_impl(
         message=message,
         session_name=resolved_session_name,
         terminal_id=terminal_id,
+        provider=launched_provider,
     )
 
 
@@ -432,9 +475,9 @@ def _read_session_output_impl(
     if not resolved_terminal_id:
         if not session_name:
             return {"success": False, "message": "Provide either terminal_id or session_name"}
-        info, error = _request_json(
+        info, error = _request_session_json(
             "get",
-            f"/sessions/{session_name}",
+            session_name,
             operation=f"Resolve terminals for session '{session_name}'",
         )
         if error:
@@ -671,9 +714,9 @@ async def get_session_info(
     Returns:
         Dict with session fields, or {"success": False, "message": ...} on error
     """
-    data, error = _request_json(
+    data, error = _request_session_json(
         "get",
-        f"/sessions/{session_name}",
+        session_name,
         operation=f"Get session info for '{session_name}'",
     )
     if error:
@@ -697,9 +740,9 @@ async def shutdown_session(
     Returns:
         Dict with success status and cleanup details, or failure dict on error
     """
-    data, error = _request_json(
+    data, error = _request_session_json(
         "delete",
-        f"/sessions/{session_name}",
+        session_name,
         operation=f"Shutdown session '{session_name}'",
     )
     if error:
