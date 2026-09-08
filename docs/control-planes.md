@@ -92,6 +92,8 @@ The current tools are grouped by purpose:
 for before sending work. CAO stores session names with a `cao-` prefix
 (`launch_session(session_name="acc-1")` creates `cao-acc-1`); the name-taking
 tools accept either the stored name or the bare name you passed at launch.
+Installed [plugins](plugins.md#mcp-tool-surfaces) can register additional tools on this
+server through `on_mcp_server`, the same hook `cao-mcp-server` honours.
 
 MCP tool discovery is authoritative for clients. The declarations in
 [`ops_mcp_server/server.py`](../src/cli_agent_orchestrator/ops_mcp_server/server.py)
