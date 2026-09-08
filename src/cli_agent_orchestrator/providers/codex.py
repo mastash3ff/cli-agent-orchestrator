@@ -139,6 +139,21 @@ UPDATE_DIALOG_MENU_PATTERN = r"Skip until next version"
 UPDATE_DIALOG_FOOTER = TRUST_PROMPT_FOOTER
 STARTUP_PROMPT_BOTTOM_LINES = 15
 STARTUP_ACTIVITY_PATTERN = r"^\s*•[^\S\n]+\S"
+# Known informational bullets Codex prints once at startup, before the composer,
+# that are NOT live activity -- e.g. "• You have 3 usage limit resets available.
+# Run /usage to use one." STARTUP_ACTIVITY_PATTERN matches any bullet line with
+# content, so without this exclusion a perfectly idle startup frame (banner, tip,
+# this notice, empty composer, footer) trips the readiness veto and initialize()
+# times out (issue #739) even though the pane is visibly idle.
+STARTUP_NOTICE_BULLET_PATTERN = r"^\s*•[^\S\n]+You have \d+ usage limit resets? available"
+# The composer's own literal empty-placeholder line -- narrower than
+# STARTUP_IDLE_PLACEHOLDER_PATTERN's full alternation (which also matches
+# in-progress suggestion placeholders like "Write tests for @filename" that
+# a still-working spinner frame can legitimately be followed by). Used to
+# recognize an as-yet-unlisted notice bullet: a bullet with no spinner suffix
+# that is directly followed by this exact empty composer is startup chrome,
+# not activity.
+STARTUP_EMPTY_COMPOSER_PATTERN = r"^\s*[»›][^\S\n]+Ask Codex to do anything\s*$"
 # Codex's runtime approval prompt as actually rendered by codex-cli 0.147.0,
 # verified against a live tmux capture (test/providers/fixtures/
 # codex_approval_modal_raw.txt):
@@ -684,13 +699,39 @@ def _has_approval_prompt_in_bottom(clean_output: str) -> bool:
     return options >= APPROVAL_MENU_MIN_OPTIONS
 
 
+def _has_startup_activity_bullet(tail_lines: list) -> bool:
+    """True when the startup tail's bullet lines indicate live activity.
+
+    STARTUP_ACTIVITY_PATTERN matches ANY bullet line with content, which also
+    catches static informational notices Codex prints before the composer at
+    startup (e.g. "• You have 3 usage limit resets available. Run /usage to
+    use one."), wrongly vetoing readiness on an otherwise idle pane (#739). A
+    bullet only counts as real activity here when it carries the spinner's
+    "esc to interrupt" suffix, or -- for a not-yet-enumerated notice -- is not
+    immediately followed by the composer's own empty placeholder line further
+    down the tail (i.e. Codex has not actually settled into a ready state).
+    """
+    for index, line in enumerate(tail_lines):
+        if not re.search(STARTUP_ACTIVITY_PATTERN, line):
+            continue
+        if "esc to interrupt" in line:
+            return True
+        if re.search(STARTUP_NOTICE_BULLET_PATTERN, line):
+            continue
+        remaining = tail_lines[index + 1 :]
+        if any(re.match(STARTUP_EMPTY_COMPOSER_PATTERN, later) for later in remaining):
+            continue
+        return True
+    return False
+
+
 def _has_startup_idle_composer(clean_output: str) -> bool:
     """Return True when the bottom of the pane shows Codex's idle composer."""
     all_lines = clean_output.splitlines()
     tail_lines = all_lines[-STARTUP_PROMPT_BOTTOM_LINES:]
     tail_output = "\n".join(tail_lines)
 
-    if re.search(STARTUP_ACTIVITY_PATTERN, tail_output, re.MULTILINE):
+    if _has_startup_activity_bullet(tail_lines):
         return False
     if re.search(WAITING_PROMPT_PATTERN, tail_output, re.IGNORECASE | re.MULTILINE):
         return False

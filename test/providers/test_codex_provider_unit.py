@@ -2313,6 +2313,44 @@ class TestCodexProviderTrustPrompt:
 
         assert _has_startup_idle_composer(output) is True
 
+    def test_usage_limit_notice_bullet_does_not_veto_readiness(self):
+        """Issue #739: an account-notice bullet at startup must not veto readiness.
+
+        codex-cli 0.153.4 prints an informational bullet ("You have N usage
+        limit resets available. Run /usage to use one.") before the composer
+        on a perfectly idle startup screen. STARTUP_ACTIVITY_PATTERN matches
+        ANY bullet line with content, so without the notice exclusion this
+        frame vetoed readiness and initialize() logged "Codex startup prompt
+        handler timed out" on a pane that was visibly idle.
+        """
+        output = (
+            "╭───────────────────────────────────────────╮\n"
+            "│ >_ OpenAI Codex (v0.153.4)                 │\n"
+            "│ model: gpt-6-astra ultra                   │\n"
+            "│ directory: ~/path                          │\n"
+            "╰───────────────────────────────────────────╯\n"
+            "  Tip: You can run any shell command from Codex using ! (e.g. !ls)\n"
+            "\n"
+            "• You have 3 usage limit resets available. Run /usage to use one.\n"
+            "\n"
+            "» Ask Codex to do anything\n"
+            "\n"
+            "  gpt-6-astra ultra · ~/path\n"
+        )
+
+        assert _has_startup_idle_composer(output) is True
+
+    def test_live_working_spinner_still_vetoes_startup_readiness(self):
+        """A real spinner bullet must still veto readiness (not just any bullet)."""
+        output = (
+            "OpenAI Codex (v0.153.4)\n"
+            "• Working (3s • esc to interrupt)\n"
+            "» Ask Codex to do anything\n"
+            "  gpt-6-astra ultra · ~/path\n"
+        )
+
+        assert _has_startup_idle_composer(output) is False
+
     @pytest.mark.asyncio
     @patch(
         "cli_agent_orchestrator.providers.codex.time.time",
