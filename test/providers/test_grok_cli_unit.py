@@ -120,6 +120,45 @@ def test_stale_permission_and_error_before_current_ready_are_ignored():
     assert make_provider().get_status(output) == TerminalStatus.IDLE
 
 
+def test_weekly_limit_picker_after_stale_waiting_is_error():
+    """grok 1.0.13's weekly-limit picker must classify as ERROR, ending a
+    blocking handoff with "You hit your weekly limit" reaching the caller --
+    even when a stale "Waiting for response…"/"Esc:cancel" PROCESSING marker
+    from the turn that hit the limit still precedes it in the buffer, and
+    even though the picker's own footer ("Tab:next answer" / "Enter:submit")
+    also matches WAITING_USER_PATTERN. Without the fix this pane reported
+    PROCESSING indefinitely."""
+    picker = (
+        "  ┃  You hit your weekly limit.\n"
+        "  ┃\n"
+        "  ┃  1 (○) Upgrade tier      Upgrade to a higher tier for more usage\n"
+        "  ┃  2 (○) Buy more credits  Purchase credits to keep using Grok Build\n"
+        "  ┃  3 (○) Try Again         Resubmit the last prompt once you have usage again\n"
+        "  ┃\n"
+        "  ┃  ↑/↓ navigate · y copy                                                Enter:submit\n"
+        "  ┃\n"
+        "  Tab:next answer  │  Esc:scrollback  │  Shift+x:dismiss\n"
+    )
+    output = "Waiting for response…\nEsc:cancel\n" + picker
+    assert make_provider().get_status(output) == TerminalStatus.ERROR
+
+
+def test_generic_picker_with_tab_next_answer_is_waiting_user_answer():
+    """A picker of the same shape (Tab:next answer / Enter:submit footer) but
+    without the weekly-limit text must read WAITING_USER_ANSWER, not ERROR."""
+    picker = (
+        "  ┃  Pick an option\n"
+        "  ┃\n"
+        "  ┃  1 (○) Option A\n"
+        "  ┃  2 (○) Option B\n"
+        "  ┃\n"
+        "  ┃  ↑/↓ navigate · y copy                                                Enter:submit\n"
+        "  ┃\n"
+        "  Tab:next answer  │  Esc:scrollback  │  Shift+x:dismiss\n"
+    )
+    assert make_provider().get_status(picker) == TerminalStatus.WAITING_USER_ANSWER
+
+
 def test_old_idle_then_current_processing_is_processing():
     output = load_fixture("grok_cli_idle.txt") + "\n" + load_fixture("grok_cli_processing.txt")
     assert make_provider().get_status(output) == TerminalStatus.PROCESSING

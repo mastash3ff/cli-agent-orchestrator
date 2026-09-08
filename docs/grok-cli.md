@@ -110,6 +110,12 @@ env GROK_SUBAGENTS=0 GROK_WORKFLOWS=0 GROK_GOAL=0 \
   combination was verified against Grok Build 1.0.0; recheck it after a Grok
   upgrade because these controls are not all shown by `grok --help`.
 - A single Enter submits bracketed-paste input. `/quit` exits the session.
+- A usage-limit picker (`You hit your weekly limit.` with `Upgrade tier` / `Buy more
+  credits` / `Try Again` options and a `Tab:next answer` footer) is classified as
+  ERROR so a blocking `handoff` or `assign` ends immediately instead of reporting
+  PROCESSING until its timeout; the limit text is returned to the caller. Other
+  pickers of the same shape (`Tab:next answer`, `Enter:submit`) read as
+  WAITING_USER_ANSWER.
 
 ### Native workflow opt-in
 
@@ -210,8 +216,9 @@ restrictions. Do not substitute `--yolo` when validating supervisor safety.
 
 - The provider targets Grok Build's interactive TUI and currently requires the
   tmux backend. Headless `-p` and ACP modes are not CAO transports.
-- TUI parsing is calibrated against Grok Build 1.0.0. A future layout change
-  may require updated status and extraction fixtures.
+- TUI parsing is calibrated against Grok Build 1.0.0; the usage-limit picker
+  fixture was captured on 1.0.13. A future layout change may require updated
+  status and extraction fixtures.
 - CAO reuses existing Grok authentication. Complete interactive login first;
   CAO does not drive account or device-code login screens.
 - Per-tool MCP gating is not available. `@cao-mcp-server` does not selectively

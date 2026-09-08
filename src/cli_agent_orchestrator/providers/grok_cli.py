@@ -78,7 +78,7 @@ IDLE_COMPOSER_PATTERN = re.compile(r"│\s*❯\s*│")
 # Active turns instead show ``Esc:cancel``/``[stop]``, which are checked first.
 READY_FOOTER_PATTERN = re.compile(r"Ctrl\+x:shortcuts", re.IGNORECASE)
 WAITING_USER_PATTERN = re.compile(
-    r"(?:\d+/\d+:select|Tab:next option|Ctrl\+c:cancel|"
+    r"(?:\d+/\d+:select|Tab:next option|Tab:next answer|Enter:submit|Ctrl\+c:cancel|"
     r"Waiting for approval\.\.\.|Approve in your browser to finish signing in|"
     r"Yes, proceed|No, reject \(type to add feedback\))",
     re.IGNORECASE,
@@ -94,7 +94,16 @@ DIRECTORY_TRUST_PATTERN = re.compile(
 ERROR_PATTERN = re.compile(
     r"^(?:Error:|ERROR:|panic:|Traceback \(most recent call last\):|"
     r"Authentication failed|Failed to (?:start|connect|load)|"
-    r"Unknown model|Model .* (?:not found|unavailable))",
+    r"Unknown model|Model .* (?:not found|unavailable))|"
+    # Weekly-limit picker (grok 1.0.13): rendered as
+    # "  ┃  You hit your weekly limit." inside a boxed picker, not at column
+    # 0, so this alternative is deliberately outside the ^(?:...) group above.
+    # Without it the picker's own footer ("Tab:next answer" / "Enter:submit")
+    # only ever read as WAITING_USER_ANSWER or -- with a stale "Waiting for
+    # response…"/"Esc:cancel" PROCESSING marker still ahead of it in the
+    # buffer -- kept CAO reporting PROCESSING forever, since nothing in the
+    # buffer ever matched a completion/error boundary.
+    r"You hit your weekly limit",
     re.IGNORECASE | re.MULTILINE,
 )
 
@@ -711,6 +720,21 @@ class GrokCliProvider(BaseProvider):
 
         # Pickers/login are bottom-of-screen blocking surfaces. Position guards
         # keep a dismissed prompt retained in scrollback from pinning status.
+        #
+        # ERROR is checked first, ahead of WAITING and PROCESSING, and is
+        # gated only against last_completion/last_ready (the same "still
+        # current" guard the other two use) -- NOT against last_waiting or
+        # last_processing. A blocking error picker (e.g. the weekly-limit
+        # picker, which also carries a "Tab:next answer"/"Enter:submit"
+        # footer that matches WAITING_USER_PATTERN, and is commonly preceded
+        # in the buffer by a stale "Waiting for response…"/"Esc:cancel"
+        # PROCESSING marker from the turn that hit the limit) must win over
+        # both: it is the more actionable state, and it is what lets a
+        # blocking handoff end with the error text reaching the caller
+        # instead of spinning on PROCESSING/WAITING_USER_ANSWER forever.
+        if last_error > max(last_completion, last_ready):
+            return TerminalStatus.ERROR
+
         if last_waiting > max(last_completion, last_ready):
             return TerminalStatus.WAITING_USER_ANSWER
 
@@ -718,9 +742,6 @@ class GrokCliProvider(BaseProvider):
             if self._awaiting_turn_activity:
                 self._turn_activity_seen = True
             return TerminalStatus.PROCESSING
-
-        if last_error > max(last_completion, last_ready, last_processing):
-            return TerminalStatus.ERROR
 
         if last_ready >= 0:
             if last_completion >= 0 and self._turns > 0:
